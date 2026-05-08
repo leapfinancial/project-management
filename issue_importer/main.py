@@ -15,6 +15,7 @@ import sys
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from dotenv import load_dotenv
 import requests
@@ -25,8 +26,8 @@ load_dotenv(Path(__file__).parent / ".env")
 # Configuration
 # ---------------------------------------------------------------------------
 GITHUB_OWNER = "leapfinancial"
-GITHUB_REPO = "management"
-PROJECT_NAME = "project-management"
+GITHUB_REPO = "project-management"
+PROJECT_NAME = "EOS Board"
 CSV_PATH = Path(__file__).parent / "input_data" / "eos-rock.csv"
 
 REST_BASE = "https://api.github.com"
@@ -128,7 +129,7 @@ def ensure_label(token: str, name: str, color: str, *, dry_run: bool) -> None:
         return
 
     try:
-        _rest_get(token, f"/repos/{GITHUB_OWNER}/{GITHUB_REPO}/labels/{requests.utils.quote(name, safe='')}")
+        _rest_get(token, f"/repos/{GITHUB_OWNER}/{GITHUB_REPO}/labels/{quote(name, safe='')}")
         return  # already exists
     except requests.HTTPError as exc:
         if exc.response is not None and exc.response.status_code == 404:
@@ -232,7 +233,7 @@ def _find_existing_issue(token: str, title: str) -> int | None:
     return None
 
 
-def create_issue(token: str, row: dict[str, str], *, dry_run: bool) -> int | None:
+def create_issue(token: str, row: dict[str, str], *, dry_run: bool) -> str | None:
     """Create a GitHub issue for one CSV row. Returns the issue node_id or None."""
     title = row.get("Task Name", "").strip()
     if not title:

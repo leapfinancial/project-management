@@ -1,0 +1,7 @@
+README.md
+pyproject.toml
+issue_importer.egg-info/PKG-INFO
+issue_importer.egg-info/SOURCES.txt
+issue_importer.egg-info/dependency_links.txt
+issue_importer.egg-info/requires.txt
+issue_importer.egg-info/top_level.txt

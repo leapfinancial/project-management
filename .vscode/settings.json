@@ -1,0 +1,3 @@
+{
+  "python.defaultInterpreterPath": "${workspaceFolder}/project-management/issue_importer/.venv/Scripts/python.exe"
+}
