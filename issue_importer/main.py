@@ -1,8 +1,9 @@
 """ClickUp CSV to GitHub Projects importer.
 
-Reads an EOS Rock CSV export from ClickUp and creates GitHub Issues
-in leapfinancial/management, then adds them to the project-management
-GitHub Project (v2).
+Reads a ClickUp task list CSV export and creates GitHub Issues in
+leapfinancial/project-management, then adds them to an organization
+GitHub Project (v2). Default input is the Technical Requirements / TA RaaS
+export; override with --csv.
 """
 
 from __future__ import annotations
@@ -27,8 +28,9 @@ load_dotenv(Path(__file__).parent / ".env")
 # ---------------------------------------------------------------------------
 GITHUB_OWNER = "leapfinancial"
 GITHUB_REPO = "project-management"
-PROJECT_NAME = "EOS Board"
-CSV_PATH = Path(__file__).parent / "input_data" / "eos-rock.csv"
+# Target org Project (v2) title: --project-name, then GITHUB_PROJECT_NAME, else fallback.
+DEFAULT_GITHUB_PROJECT_NAME = "EOS Board"
+CSV_PATH = Path(__file__).parent / "input_data" / "Technical Requirements TA Raa S.csv"
 
 REST_BASE = "https://api.github.com"
 GRAPHQL_URL = "https://api.github.com/graphql"
@@ -178,6 +180,7 @@ def ensure_all_labels(token: str, rows: list[dict[str, str]], *, dry_run: bool) 
 def _build_issue_body(row: dict[str, str]) -> str:
     content = row.get("Task Content", "").strip()
     task_id = row.get("Task ID", "").strip()
+    task_custom_id = row.get("Task Custom ID", "").strip()
     assignees = row.get("Assignee", "").strip()
     due_date = row.get("Due Date", "").strip()
     start_date = row.get("Start Date", "").strip()
@@ -185,9 +188,11 @@ def _build_issue_body(row: dict[str, str]) -> str:
     progress = row.get("Progress (manual progress)", "").strip()
     subtask_urls = _clean_list_field(row.get("Subtask URL's", ""))
 
-    lines = ["## Rock Statement (EOS)", "", content, "", "---", ""]
+    lines = ["## Description", "", content, "", "---", ""]
 
     lines.append(f"**ClickUp ID:** `{task_id}`")
+    if task_custom_id:
+        lines.append(f"**ClickUp Custom ID:** `{task_custom_id}`")
     if assignees:
         lines.append(f"**Assignee(s):** {assignees}")
     if due_date:
@@ -299,27 +304,36 @@ mutation($projectId: ID!, $contentId: ID!) {
 """
 
 
-def find_project_id(token: str) -> str:
+def find_project_id(token: str, project_title: str) -> str:
     """Find the node ID of the target GitHub Project (v2)."""
     cursor = None
     while True:
         data = _graphql(token, FIND_PROJECT_QUERY, {"org": GITHUB_OWNER, "cursor": cursor})
         projects = data["organization"]["projectsV2"]
         for node in projects["nodes"]:
-            if node["title"] == PROJECT_NAME:
+            if node["title"] == project_title:
                 return node["id"]
         if not projects["pageInfo"]["hasNextPage"]:
             break
         cursor = projects["pageInfo"]["endCursor"]
-    raise RuntimeError(f"Project '{PROJECT_NAME}' not found in org '{GITHUB_OWNER}'")
+    raise RuntimeError(
+        f"Project '{project_title}' not found in org '{GITHUB_OWNER}'"
+    )
 
 
-def add_issue_to_project(token: str, project_id: str, issue_node_id: str, *, dry_run: bool) -> None:
+def add_issue_to_project(
+    token: str,
+    project_id: str,
+    issue_node_id: str,
+    project_title: str,
+    *,
+    dry_run: bool,
+) -> None:
     if dry_run:
-        print(f"  [dry-run] Would add issue to project {PROJECT_NAME}")
+        print(f"  [dry-run] Would add issue to project {project_title}")
         return
 
-    print(f"  Adding issue to project '{PROJECT_NAME}'")
+    print(f"  Adding issue to project '{project_title}'")
     _graphql(
         token,
         ADD_ITEM_MUTATION,
@@ -336,7 +350,18 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Import ClickUp CSV into GitHub Issues + Project")
     parser.add_argument("--dry-run", action="store_true", help="Preview changes without creating anything")
     parser.add_argument("--csv", type=Path, default=CSV_PATH, help="Path to the ClickUp CSV file")
+    parser.add_argument(
+        "--project-name",
+        default=None,
+        help="Exact title of the org GitHub Project (v2); overrides GITHUB_PROJECT_NAME",
+    )
     args = parser.parse_args()
+
+    project_title = (
+        args.project_name
+        or os.environ.get("GITHUB_PROJECT_NAME")
+        or DEFAULT_GITHUB_PROJECT_NAME
+    )
 
     token = os.environ.get("GITHUB_TOKEN")
     if not token:
@@ -354,13 +379,15 @@ def main() -> None:
     if args.dry_run:
         print("\n*** DRY RUN — no changes will be made ***\n")
 
+    print(f"GitHub Project target: '{project_title}'")
+
     ensure_all_labels(token, rows, dry_run=args.dry_run)
 
     project_id: str | None = None
     if not args.dry_run:
         print("\n=== Looking up GitHub Project ===")
-        project_id = find_project_id(token)
-        print(f"  Found project '{PROJECT_NAME}' -> {project_id}")
+        project_id = find_project_id(token, project_title)
+        print(f"  Found project '{project_title}' -> {project_id}")
 
     print("\n=== Creating issues ===")
     created = 0
@@ -373,7 +400,13 @@ def main() -> None:
         try:
             issue_node_id = create_issue(token, row, dry_run=args.dry_run)
             if issue_node_id and project_id:
-                add_issue_to_project(token, project_id, issue_node_id, dry_run=args.dry_run)
+                add_issue_to_project(
+                    token,
+                    project_id,
+                    issue_node_id,
+                    project_title,
+                    dry_run=args.dry_run,
+                )
                 created += 1
             elif issue_node_id is None and not args.dry_run:
                 skipped += 1
