@@ -63,17 +63,47 @@ def _headers(token: str) -> dict[str, str]:
     }
 
 
+def _github_response_message(resp: requests.Response) -> str:
+    try:
+        data = resp.json()
+        if isinstance(data, dict) and data.get("message"):
+            return str(data["message"])
+    except ValueError:
+        pass
+    text = (resp.text or "").strip()
+    return text[:400] if text else str(resp.reason)
+
+
+def _raise_github_http(resp: requests.Response) -> None:
+    if resp.ok:
+        return
+    detail = _github_response_message(resp)
+    msg = f"{resp.status_code} {resp.reason}: {detail}"
+    if resp.status_code == 401:
+        msg += (
+            " — Invalid or missing credentials. Set GITHUB_TOKEN in issue_importer/.env "
+            "to a PAT that can access leapfinancial/project-management "
+            "(classic: repo scope; fine-grained: this repository + Issues read/write)."
+        )
+    elif resp.status_code == 403:
+        msg += (
+            " — Token may lack permission for this repo or SSO authorization may be "
+            "required for the organization."
+        )
+    raise requests.HTTPError(msg, response=resp)
+
+
 def _rest_get(token: str, path: str, params: dict | None = None) -> Any:
     url = f"{REST_BASE}{path}"
     resp = requests.get(url, headers=_headers(token), params=params, timeout=30)
-    resp.raise_for_status()
+    _raise_github_http(resp)
     return resp.json()
 
 
 def _rest_post(token: str, path: str, json_body: dict) -> Any:
     url = f"{REST_BASE}{path}"
     resp = requests.post(url, headers=_headers(token), json=json_body, timeout=30)
-    resp.raise_for_status()
+    _raise_github_http(resp)
     return resp.json()
 
 
@@ -84,7 +114,7 @@ def _graphql(token: str, query: str, variables: dict | None = None) -> Any:
     resp = requests.post(
         GRAPHQL_URL, headers=_headers(token), json=payload, timeout=30
     )
-    resp.raise_for_status()
+    _raise_github_http(resp)
     data = resp.json()
     if "errors" in data:
         raise RuntimeError(f"GraphQL errors: {data['errors']}")
@@ -363,9 +393,10 @@ def main() -> None:
         or DEFAULT_GITHUB_PROJECT_NAME
     )
 
-    token = os.environ.get("GITHUB_TOKEN")
+    token = (os.environ.get("GITHUB_TOKEN") or "").strip()
     if not token:
-        print("ERROR: GITHUB_TOKEN environment variable is not set.", file=sys.stderr)
+        print("ERROR: GITHUB_TOKEN is not set or empty.", file=sys.stderr)
+        print("  Add it to issue_importer/.env (or export in the shell).", file=sys.stderr)
         sys.exit(1)
 
     csv_path: Path = args.csv
