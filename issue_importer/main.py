@@ -1,9 +1,9 @@
 """ClickUp CSV to GitHub Projects importer.
 
-Reads a ClickUp task list CSV export and creates GitHub Issues in
-leapfinancial/project-management, then adds them to an organization
-GitHub Project (v2). Default input is the Technical Requirements / TA RaaS
-export; override with --csv.
+Reads a ClickUp task list CSV export (path given on the command line) and
+creates GitHub Issues in leapfinancial/project-management, then adds them
+to an organization GitHub Project (v2). The CSV must match the ClickUp
+export column layout used by Technical Requirements TA RaaS.
 """
 
 from __future__ import annotations
@@ -30,7 +30,16 @@ GITHUB_OWNER = "leapfinancial"
 GITHUB_REPO = "project-management"
 # Target org Project (v2) title: --project-name, then GITHUB_PROJECT_NAME, else fallback.
 DEFAULT_GITHUB_PROJECT_NAME = "EOS Board"
-CSV_PATH = Path(__file__).parent / "input_data" / "Technical Requirements TA Raa S.csv"
+
+# Headers that must be present (ClickUp task export; same family as Technical Requirements TA RaaS).
+REQUIRED_CSV_COLUMNS: tuple[str, ...] = (
+    "Task Name",
+    "Task ID",
+    "Task Content",
+    "Status",
+    "Assignee",
+    "Priority",
+)
 
 REST_BASE = "https://api.github.com"
 GRAPHQL_URL = "https://api.github.com/graphql"
@@ -128,6 +137,17 @@ def _graphql(token: str, query: str, variables: dict | None = None) -> Any:
 def parse_csv(csv_path: Path) -> list[dict[str, str]]:
     with open(csv_path, encoding="utf-8") as f:
         reader = csv.DictReader(f)
+        headers = reader.fieldnames
+        if not headers:
+            raise ValueError("CSV has no header row")
+        missing = [c for c in REQUIRED_CSV_COLUMNS if c not in headers]
+        if missing:
+            raise ValueError(
+                "CSV is missing required column(s): "
+                + ", ".join(missing)
+                + ". Use a ClickUp task export with the same headers as "
+                "Technical Requirements TA Raa S (Task Name, Task ID, etc.)."
+            )
         return list(reader)
 
 
@@ -377,9 +397,26 @@ def add_issue_to_project(
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Import ClickUp CSV into GitHub Issues + Project")
+    parser = argparse.ArgumentParser(
+        description="Import ClickUp CSV into GitHub Issues + Project",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Example:\n"
+            '  python main.py "input_data/Technical Requirements TA Raa S.csv" '
+            '--project-name "RAAS-Issues"'
+        ),
+    )
+    parser.add_argument(
+        "csv",
+        type=Path,
+        metavar="CSV",
+        help=(
+            "Path to a ClickUp task list CSV with the same columns as "
+            "Technical Requirements TA Raa S (Task Name, Task ID, Task Content, "
+            "Status, Assignee, Priority, etc.)"
+        ),
+    )
     parser.add_argument("--dry-run", action="store_true", help="Preview changes without creating anything")
-    parser.add_argument("--csv", type=Path, default=CSV_PATH, help="Path to the ClickUp CSV file")
     parser.add_argument(
         "--project-name",
         default=None,
@@ -404,7 +441,11 @@ def main() -> None:
         print(f"ERROR: CSV file not found: {csv_path}", file=sys.stderr)
         sys.exit(1)
 
-    rows = parse_csv(csv_path)
+    try:
+        rows = parse_csv(csv_path)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.exit(1)
     print(f"Parsed {len(rows)} tasks from {csv_path.name}")
 
     if args.dry_run:
